@@ -53,6 +53,7 @@ def test_idempotent_expense_creation():
         },
     }
     import uuid
+
     headers = {"X-User": "alice", "Idempotency-Key": f"test-key-{uuid.uuid4()}"}
 
     # 1. First create -> 201

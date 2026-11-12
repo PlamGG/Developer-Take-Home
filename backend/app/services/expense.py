@@ -70,15 +70,12 @@ def serialize_expense(expense: Expense, shares: list[tuple[str, str]]) -> Expens
 
 
 def load_expense_response(db: Session, expense: Expense) -> ExpenseResponse:
-    db_shares = (
-        db.execute(
-            select(ExpenseShare, User.username)
-            .join(User, ExpenseShare.user_id == User.id)
-            .where(ExpenseShare.expense_id == expense.id)
-            .order_by(ExpenseShare.id.asc())
-        )
-        .all()
-    )
+    db_shares = db.execute(
+        select(ExpenseShare, User.username)
+        .join(User, ExpenseShare.user_id == User.id)
+        .where(ExpenseShare.expense_id == expense.id)
+        .order_by(ExpenseShare.id.asc())
+    ).all()
     shares = [
         (username, format_satang_to_amount(int(round(float(share.amount) * 100))))
         for share, username in db_shares

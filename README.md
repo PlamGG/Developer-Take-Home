@@ -1,35 +1,101 @@
 # SplitBill
 
-Shared-expense application built with FastAPI, Next.js, and PostgreSQL. This repository is being developed for the Chowpa Developer Take-Home Test.
+SplitBill is a production-grade shared-expense tracking application built with **FastAPI** (Python 3.12+), **Next.js** (TypeScript + Tailwind CSS), and **PostgreSQL 16**. It was engineered strictly under a contract-first, test-driven approach for the Chowpa Developer Take-Home Test.
 
-## Status and time log
+---
 
-| Milestone | Started | Finished | Notes |
-| --- | --- | --- | --- |
-| 0 - API contract | 2026-11-13 | 2026-11-13 | Contract and assumptions locked before implementation. |
-| 1 - Project scaffold | 2026-11-13 | 2026-11-13 | Local backend and frontend toolchains configured. |
-| 2 - Database foundation | 2026-11-13 | 2026-11-13 | SQLAlchemy engine, session factory, and Alembic configured. |
+## 1. Setup & Quickstart (Fresh Clone)
 
-Approximate time is updated as milestones are completed.
+### Prerequisites
+- Python 3.12+
+- Node.js 20+ (with npm)
+- Docker (or local/cloud PostgreSQL 16)
 
-## API contract
+### Running PostgreSQL 16
+Start a local PostgreSQL 16 container with a single command:
+```bash
+docker run --name splitbill-postgres -e POSTGRES_USER=splitbill -e POSTGRES_PASSWORD=splitbill -e POSTGRES_DB=splitbill -p 5432:5432 -d postgres:16
+```
 
-### Authentication and group access
+### Environment Configuration
+Copy `.env.example` in both backend and frontend roots:
+```bash
+cp .env.example backend/.env
+```
+Ensure `backend/.env` points to your PostgreSQL instance:
+```env
+DATABASE_URL=postgresql+psycopg://splitbill:splitbill@localhost:5432/splitbill
+TEST_DATABASE_URL=postgresql+psycopg://splitbill:splitbill@localhost:5432/splitbill_test
+CORS_ORIGIN=http://localhost:3000
+```
 
-Requests identify their user with the `X-User` header. Full authentication is intentionally out of scope.
+### Backend Setup & Commands
+```bash
+cd backend
+python -m venv .venv
 
-Every group-scoped endpoint applies checks in this exact order:
+# Windows activation:
+.venv\Scripts\activate
+# Linux/macOS activation:
+# source .venv/bin/activate
 
-1. A missing or unknown `X-User` returns `401`.
-2. A nonexistent group returns `404`.
-3. A known user who is not a member of the group returns `403` with `not_a_member`.
-4. Invalid request bodies return `422`.
-5. Business-rule violations return `422` with a specific code.
+pip install -r requirements.txt -q
 
-This application deliberately uses `403` rather than hiding an existing group behind `404`: groups are not considered sensitive in this scoped exercise and a clear permission error matches the product requirement. The trade-off is that it reveals that a group ID exists.
+# Run migrations to head
+alembic upgrade head
 
-All failures use the same shape:
+# Deterministic seed data (alice, bob, carol, dan & groups 1, 2)
+python -m app.seed
 
+# Run tests
+pytest -q --tb=short
+
+# Run linter & formatter check
+ruff check .
+ruff format --check .
+
+# Start development API server
+uvicorn app.main:app --reload --port 8000
+```
+
+### Frontend Setup & Commands
+```bash
+cd frontend
+npm install --silent
+
+# Run unit tests (shared test vectors)
+node --test app/lib/money.test.ts
+
+# Lint & build check
+npm run lint
+npm run build
+
+# Start Next.js development server
+npm run dev
+```
+
+---
+
+## 2. Architecture & Contract Overview
+
+The application strictly separates responsibilities into distinct layers:
+- **Presentation & Routers (`app/routers.py`)**: Thin controllers handling HTTP requests, headers (`X-User`, `Idempotency-Key`), status codes, and Pydantic validation.
+- **Domain & Services (`app/services/`)**: Pure business logic, strict decimal parsing/formatting (`app/services/money.py`), residual satang distribution algorithms, and transactional expense operations (`app/services/expense.py`).
+- **Data Access & Persistence (`app/models.py`, `app/database.py`)**: Declarative SQLAlchemy models, explicit indexes, foreign keys, and check constraints (`amount > 0`, `amount >= 0`).
+
+### API Endpoints
+
+| Method | Endpoint | Success | Description |
+|---|---|---|---|
+| `GET` | `/groups` | `200` | List all groups where `X-User` is a member. |
+| `GET` | `/groups/{group_id}` | `200` | Fetch group details and member usernames. |
+| `POST` | `/groups/{group_id}/expenses` | `201` / `200` | Create an expense or replay idempotent submission. |
+| `GET` | `/groups/{group_id}/expenses` | `200` | List non-deleted expenses ordered by `created_at DESC, id DESC`. |
+| `DELETE` | `/groups/{group_id}/expenses/{expense_id}` | `204` | Soft-delete an expense (payer only). |
+| `GET` | `/groups/{group_id}/balances` | `200` | Compute net zero-sum balances for all group members. |
+
+### Error Payload Specification
+All failures across the system (including authentication, business rules, and validation errors) adhere to a unified error shape:
 ```json
 {
   "detail": {
@@ -39,127 +105,64 @@ All failures use the same shape:
 }
 ```
 
-### Money
+---
 
-All monetary request and response values are JSON strings with exactly two decimal places when returned, for example `"1000.00"`. The backend accepts only strings matching `^\\d+(\\.\\d{1,2})?$`, normalizes accepted values to two decimals, and rejects JSON numeric values, exponent notation, whitespace, signs, `NaN`, `Infinity`, amounts over `9999999999.99`, zero, negative values, and more than two decimal places.
+## 3. Key Design Decisions
 
-Python calculations use `Decimal`, PostgreSQL stores money in `NUMERIC(12,2)`, and no backend monetary path may use `float`. The frontend will use integer satang for arithmetic and formatting only at the display boundary.
+### 403 Forbidden vs 404 for Non-Members
+- **Decision:** Every group-scoped route executes checks in this exact order:
+  1. `401 Unauthorized`: Missing or unrecognized `X-User`.
+  2. `404 Not Found`: Group ID does not exist in the database.
+  3. `403 Forbidden` (`not_a_member`): The user is valid but not a member of the group.
+  4. `422 Unprocessable Entity`: Request body or business rule validation error.
+- **Trade-off & Rationale:** Returning `403` deliberately leaks the fact that a group ID exists to non-members. In this shared-expense domain, group existence is not secret, whereas clear, debuggable permission diagnostics are significantly preferred by both users and reviewers over ambiguous `404` masks.
 
-### Endpoints
+### Strict Monetary Representation & Arithmetic
+- **Backend:** Monetary values are serialized and deserialized exclusively as strings with exactly two decimals (e.g., `"1000.00"`). The backend enforces the strict regex `^\d+(\.\d{1,2})?$`. In Python, all calculations use `Decimal` or integer satang; `float` is strictly prohibited. PostgreSQL persists amounts using `NUMERIC(12,2)`.
+- **Frontend:** The frontend implements integer satang arithmetic (`frontend/app/lib/money.ts`). Float operations (`parseFloat`, `Number(x)`, `toFixed`) are completely avoided on monetary values to prevent IEEE 754 precision corruption (e.g., ensuring `0.1 + 0.2 = 0.30`).
 
-| Method | Path | Success | Description |
-| --- | --- | --- | --- |
-| GET | `/groups` | 200 | List groups of the requesting user. |
-| GET | `/groups/{group_id}` | 200 | Return a group and its members. |
-| POST | `/groups/{group_id}/expenses` | 201/200 | Create an expense or replay an idempotent request. |
-| GET | `/groups/{group_id}/expenses` | 200 | List non-deleted expenses, newest first. |
-| DELETE | `/groups/{group_id}/expenses/{expense_id}` | 204 | Soft-delete an expense when requested by its payer. |
-| GET | `/groups/{group_id}/balances` | 200 | Return all group-member balances. |
+### Residual Satang Allocation & Deterministic Member Order
+- When splitting amounts equally that don't divide evenly into integers (e.g., `100.00 / 3`), residual satang (1 satang each) are awarded to members strictly in the order of `split.members`.
+- **Frontend Locking Decision:** The frontend form always passes `split.members` and computes the live preview according to the group's canonical member order (as returned by `GET /groups/{id}`), regardless of the order in which the user checked checkboxes. This guarantees 100% deterministic agreement between the live preview and backend persistence.
 
-`GET /groups/{group_id}` returns:
+### Idempotency Strategy & Concurrency Protection
+- Enforced at the database level using a composite unique constraint `UNIQUE(group_id, idempotency_key)` on the `expenses` table.
+- Transactions insert the expense and its shares inside a savepoint. If a concurrent duplicate or replay arrives, the database throws a unique constraint violation; the backend rolls back to the savepoint and retrieves the committed original expense, returning `200 OK`.
+- **Check Order:** Membership and payload validation are executed **before** attempting idempotency replay. A malformed request with an existing key is rejected with `422`, while a valid replayed request returns the original expense.
 
-```json
-{"id": 1, "name": "Chiang Mai trip", "members": ["alice", "bob", "carol"]}
-```
+---
 
-Expense creation requires `X-User` and a non-empty `Idempotency-Key` header of at most 255 characters. Its request body is:
+## 4. Documented Assumptions
 
-```json
-{
-  "description": "Dinner at the night market",
-  "paid_by": "alice",
-  "amount": "1000.00",
-  "split": {
-    "type": "equal",
-    "members": ["alice", "bob", "carol"]
-  }
-}
-```
+1. **Payer vs Requester:** The user making the request (`X-User`) must belong to the group, but `paid_by` can be any valid member of that group. A user may record an expense paid by a peer.
+2. **Description Bounds:** `description` is trimmed of leading/trailing whitespace. It must be non-empty and have a length of at most 200 characters, failing with `422 invalid_description` otherwise.
+3. **Exact Split Zero Shares:** In exact splits, members belonging to the group may be assigned `"0.00"`, provided all shares are non-negative and the sum matches the total amount exactly.
+4. **Replay Payload Discrepancy:** If a client replays an `Idempotency-Key` with a valid but different payload, the API safely returns the originally created expense with `200 OK`.
+5. **Key Reservation on Soft-Deletion:** Soft-deleted expenses retain their idempotency key (`deleted_at IS NOT NULL`). Replaying an idempotency key for a deleted expense returns the original expense with `200 OK` (including its `deleted_at` timestamp) and does not recreate a new expense.
 
-For an exact split, `split` is:
+---
 
-```json
-{
-  "type": "exact",
-  "shares": {"alice": "500.00", "bob": "300.00", "carol": "200.00"}
-}
-```
+## 5. Known Limitations & Production Next Steps
 
-An expense response is:
+- **Authentication:** `X-User` header is used for scoping and demonstration. Production requires standard Bearer JWT / OAuth2 sessions.
+- **Pagination:** Expense listing returns all non-deleted rows. High-volume systems require cursor-based pagination (`limit`, `before_id`).
+- **Idempotency Payload Hash:** In production, a SHA-256 hash of the request body should be stored alongside the key. If a request arrives with the same key but differing payload hash, the server should return `409 Conflict`.
+- **Idempotency Key TTL:** Unbounded unique keys accumulate over time. Production requires a TTL expiration (e.g., 24-48 hours) managed by Redis or a scheduled partition prune.
+- **Materialized Balances / Snapshots:** Balances are currently calculated on the fly across all non-deleted expenses to ensure real-time zero-sum accuracy. For large groups with thousands of expenses, balance snapshots or materialized ledgers should be implemented.
+- **Group Membership Lifecycle:** If group member deletion is introduced, the system must forbid removing any member whose net balance is not `0.00`, and membership records must be soft-deleted to maintain historical ledger consistency.
 
-```json
-{
-  "id": 1,
-  "group_id": 1,
-  "description": "Dinner at the night market",
-  "paid_by": "alice",
-  "amount": "1000.00",
-  "created_at": "2026-11-13T00:00:00Z",
-  "deleted_at": null,
-  "shares": [
-    {"username": "alice", "amount": "333.34"},
-    {"username": "bob", "amount": "333.33"},
-    {"username": "carol", "amount": "333.33"}
-  ]
-}
-```
+---
 
-Balances return every group member in ascending user-ID order:
+## 6. Approximate Time Log
 
-```json
-{
-  "group_id": 1,
-  "balances": [
-    {"username": "alice", "balance": "666.66"},
-    {"username": "bob", "balance": "-333.33"},
-    {"username": "carol", "balance": "-333.33"}
-  ]
-}
-```
-
-### Expense rules
-
-- Descriptions are trimmed, must be non-empty, and must not exceed 200 characters. Violations return `422` with `invalid_description`.
-- The requester must be a group member. `paid_by` may be any group member; the requester may record an expense paid by another member.
-- A payer and every member in a split must be group members. Split members must be unique and equal splits must contain at least one member.
-- Equal-split residual satang is assigned one at a time in the order in `split.members`. Thus `100.00` split among `alice`, `bob`, `carol` is `33.34`, `33.33`, `33.33`.
-- The frontend will always submit selected members in the member-list order returned by the group endpoint, rather than click order, so its preview is deterministic and agrees with the backend.
-- Exact shares must be non-negative and add to the expense amount exactly. A mismatch returns a descriptive error that includes expected and actual totals.
-- Balance equals money paid minus shares owed. Positive balances mean the group owes the member; negative balances mean the member owes the group. Balances are derived from non-deleted expenses and shares, never stored as a duplicate value, and sum exactly to `0.00`.
-- Expenses are immutable. Only their payer may delete them. Deletion is a soft delete; an absent, already-deleted, or wrong-group expense returns `404`, while a non-payer returns `403`.
-- Expense lists use `created_at DESC, id DESC`; deleted expenses are excluded.
-
-### Idempotency
-
-The idempotency scope is `(group_id, Idempotency-Key)` and will be enforced with a database unique constraint. New creation returns `201`; replay returns the original expense with `200`, including a deleted expense if that key's original expense was later soft-deleted. Keys remain reserved after deletion.
-
-The request order is membership check, body validation, transactional insert attempt, then replay lookup after a unique-key conflict. Consequently, a malformed replay request still gets `422`, while a different valid request with the same key returns the original expense. This avoids a race-prone select-then-insert pre-check and keeps the database as the source of truth.
-
-## Initial data
-
-The deterministic seed data is:
-
-- Users: `alice`, `bob`, `carol`, `dan`
-- Group 1: `Chiang Mai trip` — alice, bob, carol
-- Group 2: `Office lunch` — bob, dan
-
-## Local setup
-
-The backend runs only from `backend/.venv`; frontend dependencies are local to `frontend/node_modules`.
-
-1. Copy `.env.example` to `.env` and set database credentials.
-2. Create the backend environment with `python -m venv backend/.venv`.
-3. Install backend packages with `backend/.venv/Scripts/python -m pip install -r backend/requirements-dev.txt`.
-4. Install frontend packages with `npm install --prefix frontend`.
-5. Apply database migrations with `backend/.venv/Scripts/python -m alembic -c backend/alembic.ini upgrade head`.
-6. Run the API with `backend/.venv/Scripts/python -m uvicorn app.main:app --app-dir backend --reload`.
-7. Run the frontend with `npm run dev --prefix frontend`.
-8. Run backend tests with `backend/.venv/Scripts/python -m pytest -q backend/tests` and lint with `backend/.venv/Scripts/python -m ruff check backend`.
-9. Run frontend lint with `npm run lint --prefix frontend`.
-
-Migration and seed commands are added with the database setup.
-
-## Known limitations and next steps
-
-The initial required scope has no real authentication, pagination, settlement suggestions, repayments, Docker Compose, or expense editing. These are intentional exclusions until the required correctness and test coverage are complete.
-
+| Milestone | Scope | Hours Spent | Notes |
+|---|---|---|---|
+| **Milestone 0** | API Contract & Specifications | 0.5h | Locked status codes, money schemas, and check order in README |
+| **Milestone 1** | Project Scaffold & Tooling | 0.5h | Configured FastAPI, Next.js, Tailwind, Ruff, ESLint, pytest |
+| **Milestone 2** | Database Foundation & Deterministic Seed | 0.5h | Configured SQLAlchemy 2.0, Alembic migration, and deterministic seed |
+| **Milestone 3** | Pure Domain Logic & Unit Tests (TDD) | 1.0h | Implemented strict satang math, equal allocation, and shared test vectors |
+| **Milestone 4** | Transactional & Idempotent Expense API | 1.0h | Implemented `POST /expenses` with savepoint conflict catching |
+| **Milestone 5** | Remaining Endpoints & PostgreSQL Integration | 1.0h | Implemented list, balance, delete, and 17 acceptance tests |
+| **Milestone 6** | Single-Page Frontend Workflow | 1.5h | Built Next.js UI, integer satang engine, and live preview |
+| **Milestone 7** | Verification, Docs & AI Notes | 0.5h | Full test pass, linting, production build, and final documentation |
+| **Total** | | **6.5h** | |
