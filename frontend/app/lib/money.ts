@@ -1,11 +1,11 @@
-const AMOUNT_REGEX = /^\d+(\.\d{1,2})?$/;
+const AMOUNT_REGEX = /^-?\d+(\.\d{1,2})?$/;
 const MAX_SATANG = 999999999999; // 9,999,999,999.99
 
 /**
  * Strips commas and checks strict numeric formatting, parsing into satang (cents).
  * Never uses parseFloat or Number(str) directly on decimal points.
  */
-export function parseAmountToSatang(input: string, allowZero = false): number {
+export function parseAmountToSatang(input: string, allowNegativeOrZero = false): number {
   if (typeof input !== "string") {
     throw new Error("Amount must be a string");
   }
@@ -14,7 +14,10 @@ export function parseAmountToSatang(input: string, allowZero = false): number {
     throw new Error("Amount must be a valid numeric string with up to 2 decimal places");
   }
 
-  const parts = clean.split(".");
+  const isNeg = clean.startsWith("-");
+  const unsigned = isNeg ? clean.slice(1) : clean;
+
+  const parts = unsigned.split(".");
   const baht = parseInt(parts[0], 10);
   let satang = 0;
   if (parts.length === 2) {
@@ -26,13 +29,15 @@ export function parseAmountToSatang(input: string, allowZero = false): number {
     }
   }
 
-  const total = baht * 100 + satang;
-  if (allowZero) {
-    if (total < 0) throw new Error("Amount cannot be negative");
+  const absTotal = baht * 100 + satang;
+  const total = isNeg ? -absTotal : absTotal;
+
+  if (allowNegativeOrZero) {
+    // any signed integer within bounds
   } else {
     if (total <= 0) throw new Error("Amount must be greater than zero");
   }
-  if (total > MAX_SATANG) {
+  if (absTotal > MAX_SATANG) {
     throw new Error("Amount exceeds maximum limit");
   }
 
