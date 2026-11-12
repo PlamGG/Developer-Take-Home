@@ -7,6 +7,7 @@ Shared-expense application built with FastAPI, Next.js, and PostgreSQL. This rep
 | Milestone | Started | Finished | Notes |
 | --- | --- | --- | --- |
 | 0 - API contract | 2026-11-13 | 2026-11-13 | Contract and assumptions locked before implementation. |
+| 1 - Project scaffold | 2026-11-13 | 2026-11-13 | Local backend and frontend toolchains configured. |
 
 Approximate time is updated as milestones are completed.
 
@@ -141,9 +142,20 @@ The deterministic seed data is:
 - Group 1: `Chiang Mai trip` — alice, bob, carol
 - Group 2: `Office lunch` — bob, dan
 
-## Planned local setup
+## Local setup
 
-The backend will run only from `backend/.venv`; frontend dependencies will be local to `frontend/node_modules`. PostgreSQL 16 configuration, migration, seed, test, run, and lint commands will be added with the project scaffold.
+The backend runs only from `backend/.venv`; frontend dependencies are local to `frontend/node_modules`.
+
+1. Copy `.env.example` to `.env` and set database credentials.
+2. Create the backend environment with `python -m venv backend/.venv`.
+3. Install backend packages with `backend/.venv/Scripts/python -m pip install -r backend/requirements-dev.txt`.
+4. Install frontend packages with `npm install --prefix frontend`.
+5. Run the API with `backend/.venv/Scripts/python -m uvicorn app.main:app --app-dir backend --reload`.
+6. Run the frontend with `npm run dev --prefix frontend`.
+7. Run backend tests with `backend/.venv/Scripts/python -m pytest -q backend/tests` and lint with `backend/.venv/Scripts/python -m ruff check backend`.
+8. Run frontend lint with `npm run lint --prefix frontend`.
+
+Migration and seed commands are added with the database setup.
 
 ## Known limitations and next steps
 
