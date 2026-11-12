@@ -10,3 +10,6 @@ __pycache__/
 .ruff_cache/
 tmp/
 
+.neon
+node_modules/
+.env.local
