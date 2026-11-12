@@ -5,8 +5,20 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.exceptions import BusinessRuleError
 from app.models import Group, User, group_members
-from app.schemas import CreateExpenseRequest, ExpenseResponse, GroupResponse
-from app.services.expense import create_expense, get_current_user, get_group_with_access_check
+from app.schemas import (
+    CreateExpenseRequest,
+    ExpenseResponse,
+    GroupBalancesResponse,
+    GroupResponse,
+)
+from app.services.expense import (
+    create_expense,
+    delete_expense,
+    get_current_user,
+    get_group_balances,
+    get_group_with_access_check,
+    list_expenses,
+)
 
 router = APIRouter()
 
@@ -85,3 +97,38 @@ def create_group_expense(
     expense_resp, status_code = create_expense(db, group_id, user, idempotency_key, payload)
     response.status_code = status_code
     return expense_resp
+
+
+@router.get("/groups/{group_id}/expenses", response_model=list[ExpenseResponse])
+def get_group_expenses(
+    group_id: int,
+    x_user: str | None = Header(None, alias="X-User"),
+    db: Session = Depends(get_db),
+) -> list[ExpenseResponse]:
+    user = get_current_user(db, x_user)
+    return list_expenses(db, group_id, user)
+
+
+@router.delete(
+    "/groups/{group_id}/expenses/{expense_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_group_expense(
+    group_id: int,
+    expense_id: int,
+    x_user: str | None = Header(None, alias="X-User"),
+    db: Session = Depends(get_db),
+) -> Response:
+    user = get_current_user(db, x_user)
+    delete_expense(db, group_id, expense_id, user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/groups/{group_id}/balances", response_model=GroupBalancesResponse)
+def get_group_balances_endpoint(
+    group_id: int,
+    x_user: str | None = Header(None, alias="X-User"),
+    db: Session = Depends(get_db),
+) -> GroupBalancesResponse:
+    user = get_current_user(db, x_user)
+    return get_group_balances(db, group_id, user)

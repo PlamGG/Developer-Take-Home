@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.exceptions import (
@@ -7,11 +8,20 @@ from app.exceptions import (
     NotFoundError,
 )
 from app.models import Expense, ExpenseShare, Group, User, group_members
-from app.schemas import CreateExpenseRequest, ExpenseResponse, ExpenseShareResponse, SplitEqual
+from app.schemas import (
+    BalanceItem,
+    CreateExpenseRequest,
+    ExpenseResponse,
+    ExpenseShareResponse,
+    GroupBalancesResponse,
+    SplitEqual,
+)
 from app.services.money import (
     allocate_equal_shares,
+    calculate_balances,
     format_satang_to_amount,
     parse_amount_to_satang,
+    parse_amount_to_satang_allow_zero,
     validate_exact_shares,
 )
 from sqlalchemy import select
@@ -60,7 +70,6 @@ def serialize_expense(expense: Expense, shares: list[tuple[str, str]]) -> Expens
 
 
 def load_expense_response(db: Session, expense: Expense) -> ExpenseResponse:
-    # Query shares ordered by id ASC
     db_shares = (
         db.execute(
             select(ExpenseShare, User.username)
@@ -84,24 +93,19 @@ def create_expense(
     idempotency_key: str,
     payload: CreateExpenseRequest,
 ) -> tuple[ExpenseResponse, int]:
-    # 1. Access check
     group = get_group_with_access_check(db, group_id, requester)
 
-    # 2. Check Idempotency-Key header
     clean_key = idempotency_key.strip()
     if not clean_key or len(clean_key) > 255:
         raise BusinessRuleError("invalid_idempotency_key", "Invalid Idempotency-Key")
 
-    # 3. Validate description
     clean_desc = payload.description.strip()
     if not clean_desc or len(clean_desc) > 200:
         raise BusinessRuleError("invalid_description", "Invalid description")
 
-    # 4. Validate amount
     satang = parse_amount_to_satang(payload.amount)
     decimal_amount = Decimal(satang) / Decimal(100)
 
-    # 5. Validate paid_by member
     payer = db.scalar(select(User).where(User.username == payload.paid_by))
     if not payer:
         raise BusinessRuleError("invalid_payer", "Payer does not exist")
@@ -114,11 +118,10 @@ def create_expense(
     if not is_payer_member:
         raise BusinessRuleError("invalid_payer", "Payer is not a member of the group")
 
-    # 6. Validate split members & calculate shares
     group_users = db.execute(
-        select(User.id, User.username).join(
-            group_members, group_members.c.user_id == User.id
-        ).where(group_members.c.group_id == group.id)
+        select(User.id, User.username)
+        .join(group_members, group_members.c.user_id == User.id)
+        .where(group_members.c.group_id == group.id)
     ).all()
     username_to_id = {u.username: u.id for u in group_users}
 
@@ -137,7 +140,6 @@ def create_expense(
                 raise BusinessRuleError("invalid_split", f"Member {m} is not in group")
         allocated_shares = validate_exact_shares(payload.amount, exact_shares)
 
-    # 7. Transactional insert with idempotency catch
     savepoint = db.begin_nested()
     try:
         new_expense = Expense(
@@ -151,7 +153,7 @@ def create_expense(
         db.flush()
 
         for uname, share_amt in allocated_shares:
-            s_satang = parse_amount_to_satang(share_amt)
+            s_satang = parse_amount_to_satang_allow_zero(share_amt)
             share_decimal = Decimal(s_satang) / Decimal(100)
             db.add(
                 ExpenseShare(
@@ -168,7 +170,6 @@ def create_expense(
 
     except IntegrityError:
         savepoint.rollback()
-        # Look up existing expense by (group_id, idempotency_key)
         existing = db.scalar(
             select(Expense).where(
                 Expense.group_id == group.id, Expense.idempotency_key == clean_key
@@ -177,3 +178,76 @@ def create_expense(
         if existing:
             return load_expense_response(db, existing), 200
         raise
+
+
+def list_expenses(db: Session, group_id: int, requester: User) -> list[ExpenseResponse]:
+    get_group_with_access_check(db, group_id, requester)
+    expenses = (
+        db.execute(
+            select(Expense)
+            .where(Expense.group_id == group_id, Expense.deleted_at.is_(None))
+            .order_by(Expense.created_at.desc(), Expense.id.desc())
+        )
+        .scalars()
+        .all()
+    )
+    return [load_expense_response(db, exp) for exp in expenses]
+
+
+def delete_expense(db: Session, group_id: int, expense_id: int, requester: User) -> None:
+    get_group_with_access_check(db, group_id, requester)
+    expense = db.scalar(
+        select(Expense).where(
+            Expense.id == expense_id,
+            Expense.group_id == group_id,
+            Expense.deleted_at.is_(None),
+        )
+    )
+    if not expense:
+        raise NotFoundError("expense_not_found", "Expense not found or already deleted")
+
+    if expense.payer_id != requester.id:
+        raise ForbiddenError("forbidden_delete", "Only the payer can delete this expense")
+
+    expense.deleted_at = datetime.now(UTC)
+    db.commit()
+
+
+def get_group_balances(db: Session, group_id: int, requester: User) -> GroupBalancesResponse:
+    get_group_with_access_check(db, group_id, requester)
+    members = (
+        db.execute(
+            select(User.username)
+            .join(group_members, group_members.c.user_id == User.id)
+            .where(group_members.c.group_id == group_id)
+            .order_by(User.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+    non_deleted_expenses = (
+        db.execute(
+            select(Expense).where(Expense.group_id == group_id, Expense.deleted_at.is_(None))
+        )
+        .scalars()
+        .all()
+    )
+
+    exp_dicts = []
+    for exp in non_deleted_expenses:
+        resp = load_expense_response(db, exp)
+        exp_dicts.append(
+            {
+                "paid_by": resp.paid_by,
+                "amount": resp.amount,
+                "deleted_at": resp.deleted_at,
+                "shares": [{"username": s.username, "amount": s.amount} for s in resp.shares],
+            }
+        )
+
+    balances = calculate_balances(members, exp_dicts)
+    return GroupBalancesResponse(
+        group_id=group_id,
+        balances=[BalanceItem(username=b["username"], balance=b["balance"]) for b in balances],
+    )

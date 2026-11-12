@@ -34,6 +34,32 @@ def parse_amount_to_satang(amount_str: str) -> int:
     return total_satang
 
 
+def parse_amount_to_satang_allow_zero(amount_str: str) -> int:
+    """Strictly parse string amount to satang (cents) allowing 0."""
+    if not isinstance(amount_str, str) or not AMOUNT_REGEX.match(amount_str):
+        raise BusinessRuleError(
+            "invalid_amount", "Amount must be a numeric string with up to 2 decimal places"
+        )
+
+    parts = amount_str.split(".")
+    baht = int(parts[0])
+    satang = 0
+    if len(parts) == 2:
+        satang_part = parts[1]
+        if len(satang_part) == 1:
+            satang = int(satang_part) * 10
+        elif len(satang_part) == 2:
+            satang = int(satang_part)
+
+    total_satang = baht * 100 + satang
+    if total_satang < 0:
+        raise BusinessRuleError("invalid_amount", "Amount cannot be negative")
+    if total_satang > MAX_SATANG:
+        raise BusinessRuleError("invalid_amount", "Amount exceeds maximum supported limit")
+
+    return total_satang
+
+
 def format_satang_to_amount(satang: int) -> str:
     """Format integer satang into fixed 2 decimal string (e.g. 100.00 or -33.33)."""
     sign = "-" if satang < 0 else ""
