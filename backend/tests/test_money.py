@@ -1,14 +1,14 @@
 from decimal import Decimal
-import pytest
 
-from app.services.money import (
-    parse_amount_to_satang,
-    format_satang_to_amount,
-    allocate_equal_shares,
-    validate_exact_shares,
-    calculate_balances,
-)
+import pytest
 from app.exceptions import BusinessRuleError
+from app.services.money import (
+    allocate_equal_shares,
+    calculate_balances,
+    format_satang_to_amount,
+    parse_amount_to_satang,
+    validate_exact_shares,
+)
 
 
 def test_strict_money_parse_and_format():
@@ -16,12 +16,21 @@ def test_strict_money_parse_and_format():
     assert parse_amount_to_satang("0.01") == 1
     assert parse_amount_to_satang("10") == 1000
     assert parse_amount_to_satang("10.5") == 1050
-    assert format_satang_to_amount(10000) == "1000.00" or format_satang_to_amount(10000) == "100.00"
     assert format_satang_to_amount(10000) == "100.00"
     assert format_satang_to_amount(1) == "0.01"
 
     # Invalid formats
-    invalid_inputs = ["-10.00", "0", "0.00", "1e3", "NaN", "Infinity", "10.001", " 10.00", "10.00 "]
+    invalid_inputs = [
+        "-10.00",
+        "0",
+        "0.00",
+        "1e3",
+        "NaN",
+        "Infinity",
+        "10.001",
+        " 10.00",
+        "10.00 ",
+    ]
     for invalid in invalid_inputs:
         with pytest.raises(BusinessRuleError):
             parse_amount_to_satang(invalid)
@@ -75,7 +84,11 @@ def test_balances_calculation():
             "paid_by": "alice",
             "amount": "100.00",
             "deleted_at": None,
-            "shares": [{"username": "alice", "amount": "33.34"}, {"username": "bob", "amount": "33.33"}, {"username": "carol", "amount": "33.33"}],
+            "shares": [
+                {"username": "alice", "amount": "33.34"},
+                {"username": "bob", "amount": "33.33"},
+                {"username": "carol", "amount": "33.33"},
+            ],
         }
     ]
     balances = calculate_balances(members, expenses)
@@ -84,6 +97,5 @@ def test_balances_calculation():
         {"username": "bob", "balance": "-33.33"},
         {"username": "carol", "balance": "-33.33"},
     ]
-    # Sum must be exactly 0.00
     total = sum(Decimal(b["balance"]) for b in balances)
     assert total == Decimal("0.00")
