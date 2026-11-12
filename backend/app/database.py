@@ -23,3 +23,6 @@ def get_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+get_db = get_session

@@ -77,6 +77,7 @@ class Expense(Base):
         DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payer: Mapped[User] = relationship("User")
     shares: Mapped[list["ExpenseShare"]] = relationship(cascade="all, delete-orphan")
 
 
