@@ -55,6 +55,10 @@ During development, AI suggestions were systematically audited. Two critical uns
 - **The Issue:** Suggested keeping a static or component-level random key that only changed on page load. If the user encountered a network timeout and clicked submit again, a new key would be generated, creating duplicate expenses instead of a safe retry. Conversely, if a submission succeeded, the key remained identical, causing subsequent distinct expenses to be treated as replays.
 - **Remediation:** State machine was configured to preserve the active `Idempotency-Key` across retries during errors, while regenerating a fresh UUID immediately upon successful creation or whenever form input values are modified.
 
+### Case 4: Frontend Regex Crashing on Negative Balance Strings
+- **The Issue:** `parseAmountToSatang` in `frontend/app/lib/money.ts` initially used `^\d+(\.\d{1,2})?$` which strictly rejected negative signs. When the backend returned negative balances (e.g., `"balance": "-400.02"` for members who owe money), calling `parseAmountToSatang(b.balance)` threw an unhandled exception and crashed the React balance panel.
+- **Remediation:** Updated `AMOUNT_REGEX` to `/^-?\d+(\.\d{1,2})?$/` and added signed integer satang parsing when `allowNegativeOrZero = true`. Now negative balances render cleanly with proper formatting (e.g. `-฿400.02`).
+
 ---
 
 ## 4. Verification & Review Protocol
